@@ -8,6 +8,8 @@ const usage = '''
 facet VAULT list
 facet VAULT add TITLE [YYYY-MM-DD]
 facet VAULT due ID YYYY-MM-DD|none
+facet VAULT due ID YYYY-MM-DD HH:MM|none
+facet VAULT schedule ID YYYY-MM-DD|none [HH:MM[-HH:MM]]
 facet VAULT complete ID true|false
 facet VAULT mcp''';
 
@@ -30,6 +32,15 @@ Future<void> main(List<String> args) async {
         result = vault.capture(title, due: due).toJson();
       case ['due', String id, String date]:
         result = vault.reschedule(id, date == 'none' ? null : date).toJson();
+      case ['due', String id, String date, String time] when date != 'none':
+        result = vault.dueAt(id, date, time == 'none' ? null : parseClock(time)).toJson();
+      case ['schedule', String id, String date]:
+        result = vault.schedule(id, date == 'none' ? null : date).toJson();
+      case ['schedule', String id, String date, String times] when date != 'none':
+        final parts = times.split('-');
+        if (parts.length > 2) throw const FormatException(usage);
+        final range = clockRange(parts.first, parts.length == 2 ? parts.last : null);
+        result = vault.schedule(id, date, start: range.start, end: range.end).toJson();
       case ['complete', String id, String value] when value == 'true' || value == 'false':
         result = vault.setCompleted(id, value == 'true').toJson();
       case ['mcp']:

@@ -5,6 +5,7 @@ import 'vault.dart';
 typedef Json = Map<String, dynamic>;
 
 const _string = {'type': 'string'};
+const _nullable = {'type': ['string', 'null']};
 const _tools = [
   {
     'name': 'list_tasks',
@@ -21,10 +22,22 @@ const _tools = [
   },
   {
     'name': 'reschedule_task',
-    'description': 'Set a YYYY-MM-DD due date. Pass null to clear it.',
+    'description': 'Set a YYYY-MM-DD due date. Pass null to clear it. An optional 24-hour HH:MM time '
+        'sets the ⏰ due time and null removes it; leaving it out keeps any existing time.',
     'inputSchema': {
-      'type': 'object', 'properties': {'id': _string, 'due': {'type': ['string', 'null']}},
+      'type': 'object',
+      'properties': {'id': _string, 'due': _nullable, 'time': _nullable},
       'required': ['id', 'due'], 'additionalProperties': false,
+    },
+  },
+  {
+    'name': 'schedule_task',
+    'description': 'Block out work time: set the ⏳ YYYY-MM-DD work date and an optional 🎯 start and end '
+        'as 24-hour HH:MM. An end at or before the start is on the next day. A null date clears the schedule.',
+    'inputSchema': {
+      'type': 'object',
+      'properties': {'id': _string, 'date': _nullable, 'start': _nullable, 'end': _nullable},
+      'required': ['id', 'date'], 'additionalProperties': false,
     },
   },
   {
@@ -110,6 +123,7 @@ class FacetServer {
         requiredKeys.any((k) => !args.containsKey(k))) {
       throw ArgumentError('Check the required arguments and property names.');
     }
+    bool text(String key) => args[key] == null || args[key] is String;
     switch (name) {
       case 'list_tasks':
         return vault.list().map((t) => t.toJson()).toList();
@@ -118,8 +132,19 @@ class FacetServer {
           return vault.capture(args['title'], due: args['due']).toJson();
         }
       case 'reschedule_task':
-        if (args['id'] is String && (args['due'] == null || args['due'] is String)) {
-          return vault.reschedule(args['id'], args['due']).toJson();
+        if (args['id'] is String && text('due') && text('time')) {
+          // Leaving `time` out keeps the existing time; null removes it.
+          final due = args['due'] as String?, time = args['time'] as String?;
+          if (!args.containsKey('time') || (due == null && time == null)) {
+            return vault.reschedule(args['id'], due).toJson();
+          }
+          if (due == null) throw const FormatException('A due time needs a due date.');
+          return vault.dueAt(args['id'], due, time == null ? null : parseClock(time)).toJson();
+        }
+      case 'schedule_task':
+        if (args['id'] is String && text('date') && text('start') && text('end')) {
+          final range = clockRange(args['start'], args['end']);
+          return vault.schedule(args['id'], args['date'], start: range.start, end: range.end).toJson();
         }
       case 'set_completion':
         if (args['id'] is String && args['completed'] is bool) {

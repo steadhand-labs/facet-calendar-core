@@ -12,6 +12,25 @@ class VaultConflict implements Exception {
   String toString() => 'This note changed. Refresh and retry your edit.';
 }
 
+/// Minutes after midnight for 24-hour `HH:MM` text, such as `09:30`.
+int parseClock(String input) {
+  final m = RegExp(r'^([01]\d|2[0-3]):([0-5]\d)$').firstMatch(input);
+  if (m == null) throw const FormatException('Use a 24-hour time such as 09:30.');
+  return int.parse(m[1]!) * 60 + int.parse(m[2]!);
+}
+
+/// A start and end from `HH:MM` text. An end at or before the start falls on
+/// the next day, as a Markdown time range such as `11:00PM-1:00AM` reads.
+({int? start, int? end}) clockRange(String? start, String? end) {
+  final from = start == null ? null : parseClock(start);
+  var to = end == null ? null : parseClock(end);
+  if (from != null && to != null && to <= from) to += 24 * 60;
+  return (start: from, end: to);
+}
+
+String? _hhmm(int? minutes) => minutes == null ? null
+    : '${(minutes ~/ 60 % 24).toString().padLeft(2, '0')}:${(minutes % 60).toString().padLeft(2, '0')}';
+
 class VaultTask {
   const VaultTask(this.path, this.revision, this.task);
   final String path;
@@ -24,6 +43,7 @@ class VaultTask {
     'title': task.title, 'completed': task.done, 'due': task.due,
     'status': task.status.name, 'scheduled': task.scheduled,
     'priority': task.priority, 'recurrence': task.recurrence,
+    'start': _hhmm(task.start), 'end': _hhmm(task.end), 'dueTime': _hhmm(task.dueTime),
   };
 }
 
