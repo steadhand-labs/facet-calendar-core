@@ -1,0 +1,11 @@
+name: facet_calendar_core
+description: Markdown task parsing, local vault sync, CLI and MCP tools.
+version: 0.1.0
+environment:
+  sdk: '>=3.10.0 <4.0.0'
+dependencies:
+  crypto: ^3.0.6
+dev_dependencies:
+  test: ^1.26.0
+executables:
+  facet: facet
