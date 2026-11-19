@@ -109,8 +109,23 @@ class Vault {
     Stopwatch? burst;
     StreamSubscription<FileSystemEvent>? events;
     late final StreamController<List<VaultTask>> controller;
+    late final Future<void> Function() scan;
 
-    Future<void> scan() async {
+    void poll(Duration every) {
+      timer?.cancel();
+      timer = Timer.periodic(every, (_) => scan());
+    }
+
+    void fallBack() {
+      final watcher = events;
+      if (watcher == null || !controller.hasListener) return;
+      events = null;
+      watcher.cancel();
+      poll(interval);
+      scan();
+    }
+
+    scan = () async {
       if (!controller.hasListener || controller.isPaused) return;
       if (reading) {
         again = true; // Rescan after this pass so a mid-scan edit is not lost.
@@ -133,17 +148,15 @@ class Vault {
               lastError = e.toString();
               controller.addError(e, stack);
             }
+            // Deleting the vault root leaves the recursive watcher silent on
+            // Windows; fall back to polling so a recreated folder is seen soon.
+            if (events != null) fallBack();
           }
         } while (again && controller.hasListener && !controller.isPaused);
       } finally {
         reading = false;
       }
-    }
-
-    void poll(Duration every) {
-      timer?.cancel();
-      timer = Timer.periodic(every, (_) => scan());
-    }
+    };
 
     void changed() {
       final started = burst ??= Stopwatch()..start();
@@ -156,15 +169,6 @@ class Vault {
         burst = null;
         scan();
       });
-    }
-
-    void fallBack() {
-      final watcher = events;
-      if (watcher == null || !controller.hasListener) return;
-      events = null;
-      watcher.cancel();
-      poll(interval);
-      scan();
     }
 
     bool listenForEvents() {
