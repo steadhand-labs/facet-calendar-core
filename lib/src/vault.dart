@@ -270,12 +270,17 @@ class Vault {
   }
 
   /// Appends an open task to [note], a vault-relative Markdown path whose
-  /// folder already exists. The note is created when missing.
-  VaultTask capture(String title, {String? due, String note = 'Inbox.md'}) {
+  /// folder already exists. The note is created when missing. A [scheduled]
+  /// date and [start] minute add `🎯` and `⏳` in TaskForge order.
+  VaultTask capture(String title, {String? due, String note = 'Inbox.md', String? scheduled, int? start}) {
     if (title.trim().isEmpty || title.contains(lineBreak) || title.contains('\u0000')) {
       throw const FormatException('Enter a task title on one line.');
     }
     if (due != null) validateDate(due);
+    var row = '- [ ] ${title.trim()}${due == null ? '' : ' 📅 $due'}';
+    if (scheduled != null || start != null) {
+      row = parseMarkdown(row).single.withSchedule(scheduled, start: start);
+    }
     final file = _file(note);
     if (!file.parent.existsSync()) {
       throw const FormatException('Choose a note in an existing folder.');
@@ -286,7 +291,6 @@ class Vault {
       final ending = lineBreak.firstMatch(before.text)?.group(0) ?? '\n';
       final needsBreak = before.text.isNotEmpty && before.text != '\uFEFF' &&
           !before.text.endsWith('\n') && !before.text.endsWith('\r');
-      final row = '- [ ] ${title.trim()}${due == null ? '' : ' 📅 $due'}';
       final next = '${before.text}${needsBreak ? ending : ''}$row$ending';
       final tasks = parseMarkdown(next);
       if (tasks.isEmpty || tasks.last.line != lineBreak.allMatches(next).length) {
@@ -299,6 +303,11 @@ class Vault {
 
   VaultTask reschedule(String id, String? due) =>
       _update(id, (task) => task.withDue(due));
+
+  /// Sets the due date and its time in minutes after midnight. A null time
+  /// keeps the date and removes the time.
+  VaultTask dueAt(String id, String date, int? time) =>
+      _update(id, (task) => task.withDueTime(date, time));
 
   /// Sets the work date and an optional start and end in minutes after
   /// midnight. A null date clears the schedule.

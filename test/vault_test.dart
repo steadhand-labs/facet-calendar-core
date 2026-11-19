@@ -126,6 +126,69 @@ void main() {
     expect(note.readAsBytesSync(), utf8.encode(reopened));
   });
 
+  test('TaskForge due time from a calendar drop: read it, move it and clear it', () {
+    // Bytes TaskForge 3.1.1 wrote when the task was dropped on 2 PM, then on
+    // Friday 3:30 PM, in its calendar's Due view.
+    const due = '- [ ] Facet due with block 📅 2026-11-21 🆔 mwntjnbu ^facet1\n';
+    const dropped = '- [ ] Facet due with block ⏰ 2:00PM 📅 2026-11-21 🆔 mwntjnbu ^facet1\n';
+    const moved = '- [ ] Facet due with block ⏰ 3:30PM 📅 2026-11-20 🆔 mwntjnbu ^facet1\n';
+    final note = File('${root.path}/TaskForge.md')..writeAsStringSync(moved);
+    final read = vault.list().single.task;
+    expect((read.title, read.due, read.dueTime), ('Facet due with block', '2026-11-20', 15 * 60 + 30));
+    expect((read.scheduled, read.start), (null, null));
+
+    note.writeAsStringSync(due);
+    final timed = vault.dueAt(vault.list().single.id, '2026-11-21', 14 * 60);
+    expect(note.readAsBytesSync(), utf8.encode(dropped));
+    expect((timed.task.title, timed.task.due, timed.task.dueTime), ('Facet due with block', '2026-11-21', 840));
+    final later = vault.dueAt(timed.id, '2026-11-20', 15 * 60 + 30);
+    expect(note.readAsBytesSync(), utf8.encode(moved));
+
+    // A date-only change keeps the time. Removing the time keeps the date, and
+    // clearing the due date takes its time with it.
+    final dateOnly = vault.reschedule(later.id, '2026-11-22');
+    expect(note.readAsStringSync(), moved.replaceFirst('2026-11-20', '2026-11-22'));
+    expect(dateOnly.task.dueTime, 15 * 60 + 30);
+    final untimed = vault.dueAt(dateOnly.id, '2026-11-22', null);
+    expect(note.readAsStringSync(), due.replaceFirst('2026-11-21', '2026-11-22'));
+    expect(untimed.task.dueTime, null);
+    final again = vault.dueAt(untimed.id, '2026-11-22', 14 * 60);
+    vault.reschedule(again.id, null);
+    expect(note.readAsStringSync(), '- [ ] Facet due with block 🆔 mwntjnbu ^facet1\n');
+  });
+
+  test('a due time is added next to the due date and alongside a scheduled time', () {
+    const scheduled = '- [ ] Review revised proofs 🎯 9:00AM-9:30AM ➕ 2026-11-19 ⏳ 2026-11-20 📅 2026-11-21 🆔 mwnqserw\n';
+    final note = File('${root.path}/TaskForge.md')..writeAsStringSync(scheduled);
+    final timed = vault.dueAt(vault.list().single.id, '2026-11-21', 17 * 60);
+    expect(note.readAsStringSync(), scheduled.replaceFirst(' 📅', ' ⏰ 5:00PM 📅'));
+    expect((timed.task.start, timed.task.end, timed.task.dueTime), (540, 570, 1020));
+
+    // A plain task gains both fields at once, before the block ID.
+    inbox.writeAsStringSync('- [ ] Draft map ^b1\n');
+    final plain = vault.list().singleWhere((t) => t.path == 'Inbox.md');
+    vault.dueAt(plain.id, '2028-02-29', 0);
+    expect(inbox.readAsStringSync(), '- [ ] Draft map ⏰ 12:00AM 📅 2028-02-29 ^b1\n');
+
+    // A range is not a due time, so it stays in the title.
+    expect(parseMarkdown('- [ ] Call ⏰ 2:00PM-2:30PM 📅 2026-11-21\n').single.title, 'Call ⏰ 2:00PM-2:30PM');
+    expect(() => vault.dueAt(vault.list().singleWhere((t) => t.path == 'Inbox.md').id, '2028-02-29', 24 * 60),
+        throwsFormatException);
+  });
+
+  test('capture at a scheduled time writes 🎯 and ⏳ after the title', () {
+    final timed = vault.capture('Call the printer', scheduled: '2027-04-14', start: 14 * 60);
+    expect(inbox.readAsStringSync(), '- [ ] Call the printer 🎯 2:00PM ⏳ 2027-04-14\n');
+    expect((timed.task.scheduled, timed.task.start, timed.task.due), ('2027-04-14', 840, null));
+
+    vault.capture('Pack the proofs', due: '2027-04-16', scheduled: '2027-04-14', start: 14 * 60);
+    expect(inbox.readAsStringSync(), endsWith('- [ ] Pack the proofs 🎯 2:00PM ⏳ 2027-04-14 📅 2027-04-16\n'));
+    final before = inbox.readAsStringSync();
+    expect(() => vault.capture('No day', start: 60), throwsFormatException);
+    expect(() => vault.capture('Late', scheduled: '2027-04-14', start: 24 * 60), throwsFormatException);
+    expect(inbox.readAsStringSync(), before);
+  });
+
   test('plain Facet task gains, moves and loses a schedule in the same field order', () {
     final task = vault.capture('Draft map', due: '2028-03-01');
     final midnight = vault.schedule(task.id, '2028-02-28', start: 0);
@@ -324,6 +387,61 @@ void main() {
       expect(tasks[0].start, 9 * 60);
       expect((tasks[1].start, tasks[1].end), (23 * 60, 25 * 60));
       expect(tasks[2].due, '2026-11-20');
+    });
+
+    // TaskForge 3.1.1 read these lines after a refresh, stamped each with an
+    // ID, and listed both on their due day with the titles below. Completing
+    // the Dataview line in TaskForge wrote the exact `done` bytes.
+    test('a tag after the fields and a Dataview field mid-title keep the due date', () {
+      const tagged = '- [ ] Tag after fields 📅 2026-11-21 #work 🆔 mwnyb7gq\n';
+      const dataview = '- [ ] Dataview mid [due:: 2026-11-21] title 🆔 mwnyb7ik\n';
+      const done = '- [x] Dataview mid [due:: 2026-11-21] title ✅ 2026-11-19 🆔 mwnyb7ik\n';
+      final note = File('${root.path}/TaskForge.md')..writeAsStringSync('$tagged$dataview');
+      final [tag, mid] = vault.list();
+      expect((tag.task.title, tag.task.due), ('Tag after fields', '2026-11-21'));
+      expect((mid.task.title, mid.task.due), ('Dataview mid title', '2026-11-21'));
+
+      final completed = vault.setCompleted(mid.id, true, completedAt: DateTime(2026, 11, 19));
+      expect(note.readAsStringSync(), '$tagged$done');
+      vault.setCompleted(completed.id, false);
+      expect(note.readAsStringSync(), '$tagged$dataview');
+
+      // Edits stay in place, and new fields go at the end, not mid-title.
+      String id(int line) => vault.list().singleWhere((t) => t.task.line == line).id;
+      vault.reschedule(id(1), '2026-11-22');
+      vault.reschedule(id(2), '2026-11-23');
+      expect(note.readAsStringSync(), '${tagged.replaceFirst('21', '22')}${dataview.replaceFirst('21', '23')}');
+      vault.schedule(id(2), '2026-11-20', start: 9 * 60);
+      vault.reschedule(id(1), null);
+      expect(note.readAsStringSync(), '- [ ] Tag after fields #work 🆔 mwnyb7gq\n'
+          '- [ ] Dataview mid [due:: 2026-11-23] title 🎯 9:00AM ⏳ 2026-11-20 🆔 mwnyb7ik\n');
+      vault.reschedule(id(2), null);
+      expect(vault.list().last.task.title, 'Dataview mid title');
+      expect(note.readAsStringSync(), endsWith('- [ ] Dataview mid title 🎯 9:00AM ⏳ 2026-11-20 🆔 mwnyb7ik\n'));
+    });
+
+    test('tags before the fields stay in the title, and other bracket text is prose', () {
+      final [before, alone, start, unknown, number, twice] = parseMarkdown(
+          '- [ ] Draft #tag 📅 2026-11-21 #a #b/c\n'
+          '- [ ] #tag\n'
+          '- [ ] [due:: 2026-11-21] Call the printer\n'
+          '- [ ] Ask [owner:: Bob] about `[due:: 2026-11-21]` today\n'
+          '- [ ] Order 📅 2026-11-21 #123\n'
+          '- [ ] Fix [due:: 2026-11-20] now 📅 2026-11-21\n');
+      expect((before.title, before.due), ('Draft #tag', '2026-11-21'));
+      expect((alone.title, alone.due), ('#tag', null));
+      expect((start.title, start.due), ('Call the printer', '2026-11-21'));
+      expect((unknown.title, unknown.due), ('Ask [owner:: Bob] about `[due:: 2026-11-21]` today', null));
+      expect((number.title, number.due), ('Order 📅 2026-11-21 #123', null));
+      expect((twice.title, twice.due), ('Fix [due:: 2026-11-20] now', '2026-11-21'));
+    });
+
+    test('a line with a TaskForge ID but no creation date gains and loses ✅', () {
+      inbox.writeAsStringSync('- [ ] Facet timed 🎯 9:00AM ⏳ 2026-11-20 🆔 mwntjnel\n');
+      final done = vault.setCompleted(vault.list().single.id, true, completedAt: DateTime(2026, 11, 19));
+      expect(inbox.readAsStringSync(), '- [x] Facet timed 🎯 9:00AM ⏳ 2026-11-20 ✅ 2026-11-19 🆔 mwntjnel\n');
+      vault.setCompleted(done.id, false);
+      expect(inbox.readAsStringSync(), '- [ ] Facet timed 🎯 9:00AM ⏳ 2026-11-20 🆔 mwntjnel\n');
     });
 
     test('JSON reports status, priority, recurrence and schedule', () {

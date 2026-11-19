@@ -26,6 +26,13 @@ DateTime _day(String date) {
   return DateTime(year, month, day);
 }
 
+/// Minutes after midnight for a 12-hour clock such as `3:30PM`.
+int? _minutes(String? clock) {
+  if (clock == null) return null;
+  final [hour, minute] = clock.substring(0, clock.length - 2).split(':').map(int.parse).toList();
+  return hour % 12 * 60 + minute + (clock.endsWith('PM') ? 12 * 60 : 0);
+}
+
 String _decode(List<int> bytes) =>
     (bytes.length >= 3 && bytes[0] == 0xef && bytes[1] == 0xbb && bytes[2] == 0xbf ? '\uFEFF' : '') +
     utf8.decode(bytes, allowMalformed: true);
@@ -60,9 +67,9 @@ class _Run {
           '  expected ${literal(expected)}\n  actual   ${literal(_decode(actual))}';
     }
     if (task != null && model != null &&
-        (task.task.title != model.title || task.task.due != model.due || task.task.done != model.done)) {
+        (task.task.title != model.shown || task.task.due != model.due || task.task.done != model.done)) {
       return '$step parsed title ${literal(task.task.title)}, due ${task.task.due}, done ${task.task.done}; '
-          'expected ${literal(model.title)}, due ${model.due}, done ${model.done}.';
+          'expected ${literal(model.shown)}, due ${model.due}, done ${model.done}.';
     }
     if (roundTrip) _roundTrips++;
     return null;
@@ -109,9 +116,12 @@ _Probe _parse() => _Probe('parse', (run) {
     if (model == null && task == null) continue;
     if (model == null) return 'Line ${i + 1} parsed as a task: ${literal(task!.raw)}';
     if (task == null) return 'Line ${i + 1} is not parsed as a task: ${literal(model.text)}';
-    if (task.title != model.title || task.due != model.due || task.done != model.done) {
+    if (task.title != model.shown || task.due != model.due || task.done != model.done) {
       return 'Line ${i + 1} parsed title ${literal(task.title)}, due ${task.due}, done ${task.done}; '
-          'expected ${literal(model.title)}, due ${model.due}, done ${model.done}.';
+          'expected ${literal(model.shown)}, due ${model.due}, done ${model.done}.';
+    }
+    if (task.dueTime != _minutes(model.dueClock)) {
+      return 'Line ${i + 1} parsed due time ${task.dueTime}; expected ${model.dueClock}.';
     }
     if (task.status.symbol != (model.check == 'X' ? 'x' : model.check) ||
         task.priority != model.priority || task.recurrence != model.recurrence) {

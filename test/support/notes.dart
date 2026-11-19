@@ -10,9 +10,9 @@ class Token {
   String get text => '$before$emoji$between$value';
 }
 
-/// A task in the documented field order: 🎯 ➕ ⏳ 📅 ✅ 🆔, with priority, 🔁 and 🛫
-/// fields mixed in at any position, then an optional Obsidian block ID and
-/// trailing whitespace.
+/// A task in the documented field order: 🎯 ➕ ⏳ ⏰ 📅 ✅ 🆔, with priority, 🔁 and 🛫
+/// fields mixed in at any position and tags after the first field, then an
+/// optional Obsidian block ID and trailing whitespace.
 class TaskLine {
   const TaskLine(this.prefix, this.check, this.gap, this.title, this.tokens, this.suffix);
   final String prefix; // Indent, bullet and spacing before `[`.
@@ -23,6 +23,12 @@ class TaskLine {
   final String suffix; // Block ID and trailing whitespace.
 
   Token? field(String emoji) => tokens.where((t) => t.emoji == emoji).firstOrNull;
+  /// The title Facet shows. Tags before the first field never start the
+  /// fields, so they read as title text, for example after clearing a date.
+  String get shown {
+    final lead = tokens.takeWhile((t) => t.emoji.startsWith('#')).map((t) => t.text).join();
+    return title.isEmpty ? lead.trimLeft() : '$title$lead';
+  }
   bool get done => check == 'x' || check == 'X';
   String? get recurrence => field('🔁')?.value;
   String? get priority => switch (tokens.where((t) => _priorities.containsKey(t.emoji)).firstOrNull) {
@@ -30,7 +36,8 @@ class TaskLine {
     null => null,
   };
   String? get due => field('📅')?.value;
-  bool get taskForge => field('➕') != null && field('🆔') != null;
+  String? get dueClock => field('⏰')?.value;
+  bool get taskForge => field('🆔') != null;
   String get text =>
       '$prefix[$check]${title.isEmpty ? '' : '$gap$title'}${tokens.map((t) => t.text).join()}$suffix';
 
@@ -45,7 +52,10 @@ class TaskLine {
     if (index != -1) {
       final old = next[index];
       if (date == null) {
-        next.removeAt(index);
+        // Clearing the date also removes its ⏰ time.
+        next
+          ..removeAt(index)
+          ..removeWhere((t) => t.emoji == '⏰');
       } else {
         next[index] = Token('📅', date, old.before, old.between);
       }
@@ -56,7 +66,7 @@ class TaskLine {
     return _with(tokens: next);
   }
 
-  /// Toggles the checkbox. TaskForge tasks also gain or lose ` ✅ day` before 🆔.
+  /// Toggles the checkbox. Tasks with a 🆔 also gain or lose ` ✅ day` before it.
   TaskLine withCompletion(bool value, String day) {
     if (done == value) return this;
     final next = [...tokens];
@@ -142,7 +152,7 @@ const _plain = [
 // Prose that looks like metadata but sits mid-title, so it stays in the title.
 const _prose = [
   '📅', '🎯', '✅', '🆔', '➕', '⏳', '📅 2027-02-30', '📅 2027-01-01', '🎯 9:00AM',
-  '✅ 2027-01-01', '🆔 abc', '^caret', '- [ ]', '[x]', '📅\u00A02027-01-01', '⏳ 2026-13-01',
+  '✅ 2027-01-01', '🆔 abc', '⏰', '⏰ 2:00PM', '^caret', '- [ ]', '[x]', '📅\u00A02027-01-01', '⏳ 2026-13-01',
   ...lineSeparators,
 ];
 const _priorities = {'🔺': 'highest', '⏫': 'high', '🔼': 'medium', '🔽': 'low', '⏬': 'lowest'};
@@ -174,9 +184,12 @@ class NoteGenerator {
   /// A non-empty title that parses back unchanged.
   String title() {
     final count = 1 + random.nextInt(5);
+    // Tags may follow a field, so the last word is never a tag. Otherwise prose
+    // such as `🆔` and the next word would read as a field, and the tag with it.
     final words = [
       for (var i = 0; i < count; i++)
-        i >= count - 2 || !chance(0.35) ? pick(_plain) : pick(_prose),
+        i == count - 1 ? pick(_plain.where((w) => w != '#tag').toList())
+            : i == count - 2 || !chance(0.35) ? pick(_plain) : pick(_prose),
     ];
     final out = StringBuffer(words.first);
     for (final word in words.skip(1)) {
@@ -216,11 +229,13 @@ class NoteGenerator {
       fields['➕'] = date();
       if (chance(0.4)) fields['⏳'] = date();
       if (chance(0.6)) fields['📅'] = date();
+      // TaskForge's Due view writes a time next to the date on a drop.
+      if (fields['📅'] != null && chance(0.3)) fields['⏰'] = pick(['2:00PM', '3:30PM', '12:00AM', '11:59PM']);
       if (done && chance(0.75)) fields['✅'] = date();
       fields['🆔'] = _id();
     }
     final tokens = [
-      for (final emoji in ['🎯', '➕', '⏳', '📅', '✅', '🆔'])
+      for (final emoji in ['🎯', '➕', '⏳', '⏰', '📅', '✅', '🆔'])
         if (fields[emoji] case final value?) _token(emoji, value),
     ];
     // TaskForge also writes priority, recurrence and start dates. Their position
@@ -229,6 +244,11 @@ class NoteGenerator {
     if (chance(0.2)) mixIn(Token(pick(_priorities.keys.toList()), '', pick([' ', ' ', '\t']), ''));
     if (chance(0.12)) mixIn(_token('🔁', pick(_rules)));
     if (chance(0.12)) mixIn(_token('🛫', date()));
+    // TaskForge reads past a tag among the fields, but a tag never starts them.
+    if (tokens.isNotEmpty && chance(0.15)) {
+      tokens.insert(1 + random.nextInt(tokens.length),
+          Token(pick(['#work', '#a/b', '#café', '#x-1']), '', pick([' ', ' ', '\t', '  ']), ''));
+    }
     final empty = chance(0.06);
     final block = chance(0.25) ? '${pick([' ', ' ', '\t'])}^${_id().replaceAll('_', '')}' : '';
     final trailing = chance(0.15) ? pick([' ', '  ', '\t']) : '';

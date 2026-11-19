@@ -29,8 +29,8 @@ enum TaskStatus {
 /// A one-based source location and the exact text of a supported task.
 class MarkdownTask {
   const MarkdownTask._(this.line, this.raw, this.title, this.status, this.due, this.scheduled,
-      this.start, this.end, this.priority, this.recurrence, this._checkOffset, this._insertAt,
-      this._taskForge, this._due, this._completion, this._fields, this._fieldsEnd);
+      this.start, this.end, this.dueTime, this.priority, this.recurrence, this._checkOffset, this._insertAt,
+      this._taskForge, this._due, this._completion, this._fields, this._runStart, this._fieldsEnd);
   final int line;
   final String raw;
   /// The text before the trailing fields, so `📅`, `⏫` or `🔁 every week`
@@ -43,6 +43,9 @@ class MarkdownTask {
   /// The `🎯` start and optional end in minutes after midnight. An end clock
   /// time at or before the start falls on the following day.
   final int? start, end;
+  /// The `⏰` due time in minutes after midnight, on the due date. TaskForge
+  /// writes it when a task is dropped on a time slot in its Due view.
+  final int? dueTime;
   /// highest, high, medium, low or lowest.
   final String? priority;
   /// The `🔁` rule, such as `every week`.
@@ -53,6 +56,9 @@ class MarkdownTask {
   final _Field? _due;
   final _Field? _completion;
   final List<_Field> _fields;
+  /// Where the trailing run of fields begins. Fields read inside the title are
+  /// edited in place but never mark where a new field goes.
+  final int _runStart;
   final int _fieldsEnd;
 
   bool get done => status == TaskStatus.done;
@@ -84,8 +90,25 @@ class MarkdownTask {
     if (field == null) {
       return value == null ? raw : raw.replaceRange(_insertAt, _insertAt, ' 📅 $value');
     }
-    if (value == null) return raw.replaceRange(field.start, field.end, '');
+    if (value == null) {
+      // A due time means nothing without its date, so it goes too.
+      final spans = [field, ..._fields.where((f) => f.rank == _ranks['dueTime'])]
+        ..sort((a, b) => b.start - a.start);
+      return spans.fold(raw, (next, f) => next.replaceRange(f.start, f.end, ''));
+    }
     return raw.replaceRange(field.value, field.valueEnd, value);
+  }
+
+  /// Sets the `📅` date and its `⏰` time, replacing values in place. A missing
+  /// time goes directly before the date, where TaskForge puts it, and a null
+  /// [time] removes it.
+  String withDueTime(String date, int? time) {
+    validateDate(date);
+    if (time != null && (time < 0 || time >= _day)) {
+      throw const FormatException('Choose a due time within the day.');
+    }
+    return _apply([?_edit(_ranks['dueTime']!, '⏰', time == null ? null : _clock(time)),
+      ?_edit(_ranks['due']!, '📅', date)]);
   }
 
   /// Sets the `⏳` date and `🎯` time, replacing values in place. Missing fields
@@ -106,8 +129,13 @@ class MarkdownTask {
     }
     final time = start == null ? null
         : end == null ? _clock(start) : '${_clock(start)}-${_clock(end)}';
-    final edits = [?_edit(0, '🎯', time), ?_edit(2, '⏳', date)]
-      ..sort((a, b) => a.start == b.start ? b.rank - a.rank : b.start - a.start);
+    return _apply([?_edit(_ranks['time']!, '🎯', time), ?_edit(_ranks['scheduled']!, '⏳', date)]);
+  }
+
+  /// Applies edits from the end of the line, so earlier offsets stay valid.
+  /// Insertions at one offset land in rank order.
+  String _apply(List<({int rank, int start, int end, String text})> edits) {
+    edits.sort((a, b) => a.start == b.start ? b.rank - a.rank : b.start - a.start);
     var next = raw;
     for (final e in edits) {
       next = next.replaceRange(e.start, e.end, e.text);
@@ -122,7 +150,7 @@ class MarkdownTask {
           : (rank: rank, start: f.value, end: f.valueEnd, text: value);
     }
     if (value == null) return null;
-    final at = _fields.where((f) => f.rank > rank).firstOrNull?.start ?? _fieldsEnd;
+    final at = _fields.where((f) => f.rank > rank && f.start >= _runStart).firstOrNull?.start ?? _fieldsEnd;
     return (rank: rank, start: at, end: at, text: ' $emoji $value');
   }
 }
@@ -165,6 +193,7 @@ int _minutes(String clock) {
 final _item = RegExp(r'^([ \t]*[-*+][ \t]+\[)([ xX\-/!>~#?*])\](?:([ \t]+)(.*))?$', dotAll: true);
 const _clockTime = r'(?:[1-9]|1[0-2]):[0-5]\d[AP]M';
 final _clockAt = RegExp('($_clockTime)(?:-($_clockTime))?');
+final _oneClockAt = RegExp(_clockTime);
 final _dateAt = RegExp(r'\d{4}-\d\d-\d\d');
 final _idAt = RegExp(r'[A-Za-z0-9_-]+');
 final _dependsAt = RegExp(r'[A-Za-z0-9_-]+(?:,[A-Za-z0-9_-]+)*');
@@ -172,11 +201,13 @@ final _limitAt = RegExp(r'\d{4}-\d\d-\d\d|\d+(?:/\d+)?');
 // Dataview fields, which TaskForge reads alongside the emoji tokens.
 final _bracketAt = RegExp(r'\[([^\[\]():\r\n]+?)::[ \t]*([^\[\]\r\n]*?)[ \t]*\]');
 final _parenAt = RegExp(r'\(([^\[\]():\r\n]+?)::[ \t]*([^()\r\n]*?)[ \t]*\)');
+// An Obsidian tag, which needs a character other than a digit.
+final _tagAt = RegExp(r'#[\p{L}\p{N}_/\-]*[\p{L}_/\-][\p{L}\p{N}_/\-]*', unicode: true);
 
 /// The documented emoji tokens, with optional variation selector U+FE0F.
 const _dateMarkers = {'📅': 'due', '⏳': 'scheduled', '🛫': 'startDate', '✅': 'done', '❌': 'cancelled', '➕': 'created'};
 const _priorityMarkers = {'🔺': 'highest', '⏫': 'high', '🔼': 'medium', '🔽': 'low', '⏬': 'lowest'};
-const _otherMarkers = ['🎯', '🔁', '🔢', '🆔', '⛔'];
+const _otherMarkers = ['🎯', '⏰', '🔁', '🔢', '🆔', '⛔'];
 final _markers = [..._dateMarkers.keys, ..._priorityMarkers.keys, ..._otherMarkers];
 /// Dataview keys with the meaning of an emoji token.
 const _fieldKeys = {
@@ -186,7 +217,7 @@ const _fieldKeys = {
 };
 const _dateKinds = {'due', 'scheduled', 'startDate', 'done', 'cancelled', 'created'};
 /// TaskForge writes these fields after the title in this order.
-const _ranks = {'time': 0, 'created': 1, 'scheduled': 2, 'due': 3, 'done': 4, 'id': 5};
+const _ranks = {'time': 0, 'created': 1, 'scheduled': 2, 'dueTime': 3, 'due': 4, 'done': 5, 'id': 6};
 
 final _fence = RegExp(r'^[ \t]*(\x60{3,}|~{3,})(.*)$');
 final lineBreak = RegExp(r'\r\n|\r|\n');
@@ -269,7 +300,7 @@ int _skipBlank(String raw, int from, int limit) {
 
 /// Whether a field may begin at [at], used to end a free-text `🔁` rule.
 bool _fieldStarts(String raw, int at) =>
-    _markers.any((m) => raw.startsWith(m, at)) ||
+    _markers.any((m) => raw.startsWith(m, at)) || _tagAt.matchAsPrefix(raw, at) != null ||
     _bracketAt.matchAsPrefix(raw, at) != null || _parenAt.matchAsPrefix(raw, at) != null;
 
 _Token? _read(String raw, int at, int limit) {
@@ -298,6 +329,8 @@ _Token? _read(String raw, int at, int limit) {
     switch (marker) {
       case '🎯':
         return prefixed('time', k, _clockAt);
+      case '⏰':
+        return prefixed('dueTime', k, _oneClockAt);
       case '🆔':
         return prefixed('id', k, _idAt);
       case '⛔':
@@ -335,8 +368,16 @@ _Token? _read(String raw, int at, int limit) {
   return (kind: kind, value: v, valueEnd: v + value.length, end: bracket.end, text: text);
 }
 
+/// A `#tag` among the fields. TaskForge reads the fields on either side of it.
+_Token? _tag(String raw, int at, int limit) {
+  final m = _tagAt.matchAsPrefix(raw, at);
+  if (m == null || m.end > limit || (m.end < limit && !_blank(raw.codeUnitAt(m.end)))) return null;
+  return (kind: 'tag', value: at, valueEnd: m.end, end: m.end, text: m[0]!);
+}
+
 /// Reads a run of fields that starts with the blank at [start] and ends
-/// exactly at [limit], or null. Each meaning may appear once.
+/// exactly at [limit], or null. Each meaning may appear once. Tags may follow
+/// the first field but never start the run, so a title can end in a tag.
 List<(int, _Token)>? _fieldsFrom(String raw, int start, int limit) {
   final seen = <String>{};
   final out = <(int, _Token)>[];
@@ -344,8 +385,8 @@ List<(int, _Token)>? _fieldsFrom(String raw, int start, int limit) {
   while (pos < limit) {
     final at = _skipBlank(raw, pos, limit);
     if (at == pos || at >= limit) return null;
-    final token = _read(raw, at, limit);
-    if (token == null || !seen.add(token.kind)) return null;
+    final token = _read(raw, at, limit) ?? (out.isEmpty ? null : _tag(raw, at, limit));
+    if (token == null || (token.kind != 'tag' && !seen.add(token.kind))) return null;
     out.add((pos, token));
     pos = token.end;
   }
@@ -372,10 +413,33 @@ MarkdownTask _parseTask(int line, String raw, RegExpMatch item) {
     i = _skipBlank(raw, i, suffixStart);
   }
   final titleEnd = fields.isEmpty ? suffixStart : fields.first.$1;
-  final title = titleEnd < bodyStart ? '' : raw.substring(bodyStart, titleEnd);
-  _Token? of(String kind) => fields.where((f) => f.$2.kind == kind).firstOrNull?.$2;
+  // TaskForge also reads a Dataview field with a known meaning inside the
+  // title, and leaves it out of the title it shows. Its span takes the blanks
+  // before it, or after it at the start of the title, so removing it leaves
+  // one space.
+  final inline = <(int, _Token)>[];
+  final kinds = {for (final (_, t) in fields) t.kind};
+  for (var i = bodyStart; i < titleEnd; i++) {
+    final c = raw.codeUnitAt(i);
+    if ((c != 0x5b && c != 0x28) || (i > bodyStart && !_blank(raw.codeUnitAt(i - 1)))) continue;
+    final t = _read(raw, i, titleEnd);
+    if (t == null || t.kind.startsWith('field:') || !kinds.add(t.kind)) continue;
+    var start = i;
+    while (start > bodyStart && _blank(raw.codeUnitAt(start - 1))) {
+      start--;
+    }
+    final end = start < i ? t.end : _skipBlank(raw, t.end, titleEnd);
+    inline.add((start, (kind: t.kind, value: t.value, valueEnd: t.valueEnd, end: end, text: t.text)));
+    i = t.end - 1;
+  }
+  var title = titleEnd < bodyStart ? '' : raw.substring(bodyStart, titleEnd);
+  for (final (start, t) in inline.reversed) {
+    title = title.replaceRange(start - bodyStart, t.end - bodyStart, '');
+  }
+  final all = [...inline, ...fields];
+  _Token? of(String kind) => all.where((f) => f.$2.kind == kind).firstOrNull?.$2;
   _Field? span(String kind) {
-    for (final (start, t) in fields) {
+    for (final (start, t) in all) {
       if (t.kind == kind) return (rank: _ranks[kind] ?? -1, start: start, value: t.value, valueEnd: t.valueEnd, end: t.end);
     }
     return null;
@@ -392,13 +456,15 @@ MarkdownTask _parseTask(int line, String raw, RegExpMatch item) {
   final clock = time == null ? null : _clockAt.matchAsPrefix(time.text);
   final start = clock == null ? null : _minutes(clock[1]!);
   final end = clock?[2] == null ? null : _minutes(clock![2]!);
+  final dueTime = of('dueTime')?.text;
   return MarkdownTask._(
     line, raw, title, TaskStatus.parse(item[2]!), of('due')?.text, of('scheduled')?.text,
-    start, end == null || end > start! ? end : end + _day,
+    start, end == null || end > start! ? end : end + _day, dueTime == null ? null : _minutes(dueTime),
     of('priority')?.text, of('recurrence')?.text,
-    checkOffset, insertAt, of('created') != null && of('id') != null,
+    // TaskForge stamps 🆔 on every task and writes ✅ when it completes one.
+    checkOffset, insertAt, of('id') != null,
     span('due'), span('done'),
-    [for (final (s, t) in fields) (rank: _ranks[t.kind] ?? -1, start: s, value: t.value, valueEnd: t.valueEnd, end: t.end)],
-    suffixStart,
+    [for (final (s, t) in all) (rank: _ranks[t.kind] ?? -1, start: s, value: t.value, valueEnd: t.valueEnd, end: t.end)],
+    titleEnd, suffixStart,
   );
 }
