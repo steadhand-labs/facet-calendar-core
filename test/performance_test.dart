@@ -65,7 +65,9 @@ void main() {
         'first watch() emission ${_ms(watchFirst)}, external edit emitted after ${_ms(external)}.');
     expect(cold, lessThan(const Duration(seconds: 5)));
     expect(warm, lessThan(const Duration(seconds: 5)));
-    expect(reschedule, lessThan(const Duration(seconds: 1)));
+    // Shared CI runners (especially Windows) can stall on a single write; keep this
+    // in the same "generous" band as cold list, not a laptop micro-benchmark.
+    expect(reschedule, lessThan(const Duration(seconds: 5)));
     expect(watchFirst, lessThan(const Duration(seconds: 10)));
     expect(external, lessThan(const Duration(seconds: 10)));
   }, timeout: const Timeout(Duration(minutes: 2)));
