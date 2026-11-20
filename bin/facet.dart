@@ -11,6 +11,7 @@ facet VAULT due ID YYYY-MM-DD|none
 facet VAULT due ID YYYY-MM-DD HH:MM|none
 facet VAULT schedule ID YYYY-MM-DD|none [HH:MM[-HH:MM]]
 facet VAULT complete ID true|false
+facet VAULT written-dates [apply]
 facet VAULT mcp''';
 
 Future<void> main(List<String> args) async {
@@ -43,6 +44,12 @@ Future<void> main(List<String> args) async {
         result = vault.schedule(id, date, start: range.start, end: range.end).toJson();
       case ['complete', String id, String value] when value == 'true' || value == 'false':
         result = vault.setCompleted(id, value == 'true').toJson();
+      // Titles that open with a date in words, such as "**Thu Nov 5**". Plain
+      // `written-dates` only previews; `apply` adds each date as 📅.
+      case ['written-dates']:
+        result = [for (final (:task, :date) in vault.writtenDates(DateTime.now())) {...task.toJson(), 'date': date}];
+      case ['written-dates', 'apply']:
+        result = vault.addWrittenDates(vault.writtenDates(DateTime.now())).map((task) => task.toJson()).toList();
       case ['mcp']:
         final server = FacetServer(vault);
         await for (final line in stdin.transform(utf8.decoder).transform(const LineSplitter())) {

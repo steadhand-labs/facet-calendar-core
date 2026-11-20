@@ -101,6 +101,31 @@ void main() {
     expect(await process.exitCode, 0);
     expect(jsonDecode(output), {'jsonrpc': '2.0', 'id': 17, 'result': {}});
   });
+  test('CLI previews written dates, then adds them', () async {
+    Future<ProcessResult> cli(List<String> args) =>
+        Process.run(Platform.resolvedExecutable, ['run', 'bin/facet.dart', root.path, ...args]);
+    // The CLI reads today's date, so the line names a day three days ahead.
+    final soon = DateTime.now().add(const Duration(days: 3));
+    const days = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    final iso = DateTime.utc(soon.year, soon.month, soon.day).toIso8601String().split('T').first;
+    final line = '- [ ] **${days[soon.weekday - 1]} ${months[soon.month - 1]} ${soon.day}** · Study';
+    final note = File('${root.path}/Plan.md')..writeAsStringSync('$line\n');
+
+    final preview = await cli(['written-dates']);
+    expect(preview.exitCode, 0, reason: preview.stderr.toString());
+    expect(jsonDecode(preview.stdout), [
+      allOf(containsPair('file', 'Plan.md'), containsPair('line', 1), containsPair('date', iso)),
+    ]);
+    expect(note.readAsStringSync(), '$line\n');
+
+    final applied = await cli(['written-dates', 'apply']);
+    expect(applied.exitCode, 0, reason: applied.stderr.toString());
+    expect((jsonDecode(applied.stdout) as List).single['due'], iso);
+    expect(note.readAsStringSync(), '$line 📅 $iso\n');
+    expect(jsonDecode((await cli(['written-dates'])).stdout), isEmpty);
+  });
+
   test('two CLI writers preserve both captures', () async {
     final results = await Future.wait(['First writer', 'Second writer'].map((title) =>
         Process.run(Platform.resolvedExecutable,

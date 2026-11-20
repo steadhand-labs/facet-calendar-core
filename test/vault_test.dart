@@ -157,6 +157,25 @@ void main() {
     expect(note.readAsStringSync(), '- [ ] Facet due with block 🆔 mwntjnbu ^facet1\n');
   });
 
+  // TaskForge's agents.md: "an edit re-serializes each field as emoji, keeping
+  // an untouched bracket token in its own notation". So the bracket stays in
+  // the title, a date change edits it in place, and the new `⏰` joins the
+  // emoji fields after the title.
+  test('a due time beside a mid-title Dataview due date goes with the emoji fields', () {
+    const dataview = '- [ ] Dataview mid [due:: 2026-11-21] title 🆔 mwnyb7ik\n';
+    const timed = '- [ ] Dataview mid [due:: 2026-11-21] title ⏰ 2:00PM 🆔 mwnyb7ik\n';
+    final note = File('${root.path}/TaskForge.md')..writeAsStringSync(dataview);
+
+    final read = vault.dueAt(vault.list().single.id, '2026-11-21', 14 * 60).task;
+    expect(note.readAsBytesSync(), utf8.encode(timed));
+    expect((read.title, read.due, read.dueTime), ('Dataview mid title', '2026-11-21', 14 * 60));
+
+    final moved = vault.dueAt(vault.list().single.id, '2026-11-22', 14 * 60);
+    expect(note.readAsStringSync(), timed.replaceFirst('2026-11-21', '2026-11-22'));
+    vault.dueAt(moved.id, '2026-11-21', null);
+    expect(note.readAsBytesSync(), utf8.encode(dataview));
+  });
+
   test('a due time is added next to the due date and alongside a scheduled time', () {
     const scheduled = '- [ ] Review revised proofs 🎯 9:00AM-9:30AM ➕ 2026-11-19 ⏳ 2026-11-20 📅 2026-11-21 🆔 mwnqserw\n';
     final note = File('${root.path}/TaskForge.md')..writeAsStringSync(scheduled);

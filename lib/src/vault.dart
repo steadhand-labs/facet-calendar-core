@@ -6,6 +6,7 @@ import 'dart:isolate';
 import 'package:crypto/crypto.dart';
 
 import 'markdown.dart';
+import 'written_dates.dart';
 
 class VaultConflict implements Exception {
   @override
@@ -323,6 +324,30 @@ class Vault {
 
   VaultTask reschedule(String id, String? due) =>
       _update(id, (task) => task.withDue(due));
+
+  /// Open tasks without a due date whose title opens with a date in words,
+  /// such as `**Thu Nov 5**`, each with that date. Nothing is written.
+  List<({VaultTask task, String date})> writtenDates(DateTime today) => [
+    for (final item in list())
+      if (!item.task.status.closed && item.task.due == null)
+        if (writtenDate(item.task.title, today) case final date?) (task: item, date: date),
+  ];
+
+  /// Adds each date from [writtenDates] as `📅`, changing nothing else. A note
+  /// edited since the preview throws [VaultConflict] before its lines change.
+  List<VaultTask> addWrittenDates(List<({VaultTask task, String date})> picks) {
+    // Each write gives its note a new revision, so later lines of that note
+    // carry it forward. A conflict still stops them if anyone else wrote.
+    final revisions = <String, String>{};
+    final added = <VaultTask>[];
+    for (final (:task, :date) in picks) {
+      final current = VaultTask(task.path, revisions[task.path] ?? task.revision, task.task);
+      final dated = reschedule(current.id, date);
+      revisions[task.path] = dated.revision;
+      added.add(dated);
+    }
+    return added;
+  }
 
   /// Sets the due date and its time in minutes after midnight. A null time
   /// keeps the date and removes the time.
